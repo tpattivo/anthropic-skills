@@ -20,6 +20,11 @@ from office.soffice import get_soffice_env, run_soffice
 
 from openpyxl import load_workbook
 
+MACRO_DIR_MACOS = "~/Library/Application Support/LibreOffice/4/user/basic/Standard"
+MACRO_DIR_LINUX = "~/.config/libreoffice/4/user/basic/Standard"
+MACRO_DIR_WINDOWS = os.path.join(
+    os.environ.get("APPDATA", ""), "LibreOffice", "4", "user", "basic", "Standard"
+)
 MACRO_FILENAME = "Module1.xba"
 SOFFICE_MISSING = "soffice not found on PATH; LibreOffice is required to recalculate"
 
@@ -38,14 +43,29 @@ RECALCULATE_MACRO = """<?xml version="1.0" encoding="UTF-8"?>
 </script:module>"""
 
 
-def has_gtimeout():
-    try:
-        subprocess.run(
-            ["gtimeout", "--version"], capture_output=True, timeout=1, check=False
-        )
-        return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+def _find_macro_dir():
+    system = platform.system()
+
+    if system == "Darwin":
+        return os.path.expanduser(MACRO_DIR_MACOS)
+
+    if system == "Linux":
+        return os.path.expanduser(MACRO_DIR_LINUX)
+
+    if system == "Windows":
+        soffice_path = shutil.which("soffice") or shutil.which("soffice.COM")
+        if soffice_path:
+            exe_dir = Path(soffice_path).resolve().parent
+            portable = exe_dir.parent.parent.parent / "Data" / "settings" / "user" / "basic" / "Standard"
+            if portable.is_dir():
+                return str(portable)
+
+        if os.path.isdir(MACRO_DIR_WINDOWS):
+            return MACRO_DIR_WINDOWS
+
+        return MACRO_DIR_WINDOWS
+
+    return os.path.expanduser(MACRO_DIR_LINUX)
 
 
 def _stamp(path):
@@ -180,16 +200,11 @@ def _recalc_with_profile(filename, abs_path, timeout, profile_dir: Path):
         abs_path,
     ]
 
-    if platform.system() == "Linux" and shutil.which("timeout"):
-        cmd = ["timeout", str(timeout)] + cmd
-    elif platform.system() == "Darwin" and has_gtimeout():
-        cmd = ["gtimeout", str(timeout)] + cmd
-
     timed_out = f"LibreOffice timed out after {timeout}s; formulas were NOT recalculated. Re-run with a longer timeout."
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, env=get_soffice_env(), timeout=timeout + 15
+            cmd, capture_output=True, text=True, env=get_soffice_env(), timeout=timeout
         )
     except subprocess.TimeoutExpired:
         return {"error": timed_out}
